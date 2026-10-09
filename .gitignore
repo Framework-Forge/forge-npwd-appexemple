@@ -1,0 +1,10 @@
+node_modules/
+web/dist/
+.planning/
+.agents/
+.codex/
+.claude/
+*.log
+.env
+.env.*
+!.env.example
