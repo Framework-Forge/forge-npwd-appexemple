@@ -42,7 +42,7 @@ npm run preview
 ## FiveM installation
 
 1. Build the resource and copy the folder, `fxmanifest.lua`, both Lua directories and **all of `web/dist`** to the server.
-2. Start `pr_bridge`, then the example app, then `forge-npwd` and its lifecycle/inventory bridge. The example intentionally has no hard phone dependency: the external resource must start before the phone. Its server callback checks phone availability when used.
+2. Start `pr_bridge`, then the example app, then `forge-npwd`. Lifecycle, inventory integration and classic NPWD export compatibility are built into the phone; do not install a separate bridge or proxy group. The example intentionally has no hard phone dependency: the external resource must start before the phone. Its server callback checks phone availability when used.
 3. Add `forge-npwd-appexemple` to the existing `apps` array in the phone’s `config.json`. Do not replace the other entries.
 4. Reopen/restart the phone in a planned test. Install **Forge Example** through Forge Store.
 5. Hold an empty home-screen area, open Widgets, select **Forge · Server** or **Forge · Clock**, choose a size and place it in free cells.

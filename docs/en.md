@@ -31,13 +31,15 @@ An open-source phone platform: physical devices, security, recovery, customizabl
 
 Forge NPWD evolves NPWD without replacing its extensible philosophy.
 
-### One phone, several layers
+### One phone, built-in integration
 
-forge-npwd provides the phone, device identity and API. forge-npwd-bridge connects player lifecycle and inventory use through PR Bridge. forge-npwd-shop implements purchase, blocking and replacement services. External apps remain independent resources. This project can serve any FiveM installation with the required adapters; it is not restricted to the Forge server distribution.
+forge-npwd contains the phone, device identity, API, legacy compatibility and player/inventory integration. PR Bridge owns framework adapters; no separate phone bridge or compatibility resource is needed. forge-npwd-shop remains an optional sales/recovery service and external apps remain independent. Any FiveM server with the required PR Bridge adapters can use the project, not only the Forge distribution.
+
+Implementation: fxmanifest.lua; apps/game/server/player_bridge.lua; apps/game/client/player_bridge.lua
 
 ### What Forge adds
 
-A physical device has its own serial, profile and line. The holder can differ from the registered owner. Numeric PINs, device blocking and owner-validated replacement protect this identity. The launcher adds drag-and-drop icons, multiple pages and home widgets. Forge Store manages installed apps per profile. Canonical forge-npwd APIs and isolated legacy adapters retain older public integrations without creating another phone instance.
+A physical device has its own serial, profile and line. The holder can differ from the registered owner. Numeric PINs, device blocking and owner-validated replacement protect this identity. The launcher adds drag-and-drop icons, multiple pages and home widgets. Forge Store manages installed apps per profile. Canonical forge-npwd APIs and built-in legacy compatibility retain older public integrations without creating another phone instance.
 
 ### Read this documentation by role
 
@@ -66,7 +68,7 @@ Implementation: package.json; fxmanifest.lua
 
 ### Dependencies and startup
 
-The current phone manifest requires pr_bridge, screenshot-basic and pma-voice. Configure PR Bridge adapters for the services in your server. The phone uses mysql_connection_string and its own mysql2 pool: a database bridge alone does not replace this connection. Start external app resources before opening the phone so remoteEntry.js is already available. The example deliberately has no hard forge-npwd dependency to avoid a startup cycle; it checks phone availability at runtime. Start the lifecycle bridge, shop and legacy aliases after the phone.
+Start the selected framework, inventory and SQL driver, then PR Bridge, screenshot-basic and pma-voice before forge-npwd. Configure mysql_connection_string: the phone still uses its own mysql2 pool. Build/start apps before players open the phone; dependencies, not just textual ensure order, control startup. The example avoids a hard phone dependency to prevent cycles. Start the optional shop after the phone. No legacy proxy group or separate phone bridge is required.
 
 **server.cfg · order example**
 
@@ -75,16 +77,13 @@ ensure pr_bridge
 ensure pma-voice
 ensure screenshot-basic
 
-# Independent template: build/start before the phone.
+# Start the selected framework, inventory and SQL driver first.
+# Build/start apps before players open the phone; respect dependencies.
 ensure forge-npwd-appexemple
-# Bundled apps may depend on forge-npwd: read the startup caveat.
-# The dependency graph, not only textual ensure order, controls boot.
 ensure forge-npwd
-ensure forge-npwd-bridge
-# Optional service resource (purchase / replacement):
+# Integration and compatibility are INSIDE forge-npwd.
+# Optional purchase / replacement service:
 ensure forge-npwd-shop
-# Legacy proxies only AFTER all corresponding canonical providers:
-# ensure [forge-npwd-compat]
 ~~~
 
 Implementation: fxmanifest.lua; packages/database/src/db/pool.ts
@@ -147,25 +146,15 @@ Implementation: config.json; apps/game/server/devices/device.service.ts
 
 ### General, database and apps
 
-general.useResourceIntegration enables explicit newPlayer/unloadPlayer lifecycle exports. toggleCommand, toggleKey and defaultLanguage configure daily access. database.playerTable, identifierColumn, identifierType, phoneNumberColumn and profileQueries must match your player data model. apps is an array of external RESOURCE FOLDER names, not routes or necessarily app IDs. disabledApps is used for app availability. Install resources on the server first; Forge Store only changes which catalog apps are installed on the active profile.
+Forge NPWD enables general.useResourceIntegration internally because PR Bridge owns character loading. Do not duplicate newPlayer/unloadPlayer loops. Legacy framework convars no longer activate direct framework loaders. Configure database.playerTable, identifierColumn, identifierType, phoneNumberColumn and profileQueries for your schema: switching adapters does not migrate SQL. toggleCommand, toggleKey and defaultLanguage control access. apps contains resource folder names; Forge Store installs catalog apps per profile, not server resources.
 
-**config.json · preserve your other apps**
+Implementation: packages/config/server/index.ts; apps/game/server/player_bridge.lua; apps/phone/src/common/hooks/useExternalApps.tsx
 
-~~~json
-{
-  "apps": [
-    "forge-npwd-garage",
-    "forge-npwd-mail",
-    "forge-npwd-banking",
-    "forge-npwd-weather",
-    "forge-npwd-management",
-    "forge-npwd-housing",
-    "forge-npwd-appexemple"
-  ]
-}
-~~~
+### Built-in PR Bridge player and item flow
 
-Implementation: config.json; apps/phone/src/common/hooks/useExternalApps.tsx
+The internal integration uses GetPhoneProfile, GetAllPlayers, normalized loaded/unloaded events and inventory.RegisterUsableItem. The framework identifier and names come from PR Bridge; a pre-existing phone number is optional. device.itemName is the usable item and phone use does not consume it. The server rereads the actual slot and metadata; it never trusts a client-supplied player ID. If your inventory does not dispatch the usable-item adapter, configure its client action as forge-npwd.usePhoneItem (or event forge-npwd:client:usePhoneItem), passing the slot. Forge dynamic ox items are bound automatically. Validate each provider combination in a real server.
+
+Implementation: apps/game/server/player_bridge.lua; apps/game/client/player_bridge.lua; apps/game/server/device_bridge.lua
 
 ### Media, integrations and secrets
 
@@ -1017,6 +1006,26 @@ Implementation: typings/recovery.ts; typings/notifications.ts
 
 ### Client
 
+#### HasPhone
+
+~~~ts
+HasPhone(): boolean
+~~~
+
+Cached item availability from internal PR Bridge; not a PIN or server authorization check.
+
+Implementation: apps/game/client/player_bridge.lua
+
+#### usePhoneItem
+
+~~~ts
+usePhoneItem(data: {slot: number}, item?: {slot: number}): boolean
+~~~
+
+Inventory client entry; requests the real server-validated slot without consuming the phone.
+
+Implementation: apps/game/client/player_bridge.lua
+
 #### isPhoneVisible
 
 ~~~ts
@@ -1202,10 +1211,10 @@ Implementation: apps/game/client/cl_exports.ts
 #### newPlayer
 
 ~~~ts
-newPlayer({source, identifier, phoneNumber?, firstname?, lastname?}): Promise<void>
+newPlayer({source, identifier, phoneNumber?, firstname?, lastname?}, complete?: (success: boolean) => void): Promise<boolean>
 ~~~
 
-Load one player session when general.useResourceIntegration is enabled. Do not duplicate the lifecycle bridge.
+Normally called by the internal PR Bridge integration. Lua may supply a completion callback; do not duplicate the lifecycle loop.
 
 Implementation: apps/game/server/bridge/sv_exports.ts
 
@@ -1449,48 +1458,55 @@ Implementation: ../forge-npwd-weather/src/widgets/WeatherWidgets.tsx; ../forge-n
 
 An isolated forwarding layer preserves old public calls without running a second phone.
 
-### Install the legacy adapters
+### Compatibility already inside the phone
 
-compat/ contains aliases, export catalogs and incoming-event/callback adaptation. compat/resources contains versionable resource templates; misc/install-compat.cjs installs them in the sibling [forge-npwd-compat] group without overwriting different existing adapters. Start this group after Forge providers. The npwd resource inside this group is an empty proxy, not the original phone. Its exports forward to forge-npwd with the same arguments, results and handlers. Older public consumers do not need a second database, NUI phone or player session.
+Starting forge-npwd activates compat/exports.lua: it intercepts local FiveM export-resolution events for known legacy names and forwards to current providers, preserving arguments, return values and client/server boundaries. No empty npwd resource, proxy installer or duplicated bridge is needed. compat/client.ts, compat/server.ts and shared compat/app.lua reuse incoming-event/NUI handlers. Existing manifests declare dependency aliases with provide; provide alone does not route exports.
 
-**forge-npwd · install thin legacy aliases**
+**forge-npwd - built-in compatibility**
 
 ~~~text
-node misc/install-compat.cjs
-# Creates sibling [forge-npwd-compat], preserving existing differing files.
-# Start canonical providers first, then the necessary alias resources.
-# Do NOT start another original NPWD phone alongside Forge NPWD.
+ensure forge-npwd
+# No compatibility group or separate phone bridge to install/start.
+# Start the canonical apps you use.
+# Never run original NPWD alongside Forge NPWD.
+# Maintainers only, after changing aliases/exports:
+# node misc/generate-compat.cjs
 ~~~
 
-Implementation: compat/aliases.json; compat/proxy_client.lua; compat/proxy_server.lua
+Implementation: compat/aliases.json; compat/exports.lua; compat/app.lua
 
 ### Classic versus current examples
 
-Old exports.npwd:isPhoneVisible() and exports.npwd:sendNPWDMessage(...) continue through the npwd adapter. New code calls exports["forge-npwd"] and sendForgeNPWDMessage. The classic external-app pattern is still a resource exporting ./config, with a React app and its own NUI callbacks. The source descriptor filename can remain npwd.config.ts if federation exposes it correctly. The current Forge loader expects ESM/Vite remoteEntry.js: a legacy Webpack/global-container build is not guaranteed to load unchanged and may need rebuilding with the Forge template.
+Old exports.npwd:isPhoneVisible() and exports.npwd:sendNPWDMessage(...) continue through the internal phone router. New code calls exports["forge-npwd"] and sendForgeNPWDMessage. The classic external-app pattern is still a resource exporting ./config, with a React app and its own NUI callbacks. The source descriptor filename can remain npwd.config.ts if federation exposes it correctly. The current Forge loader expects ESM/Vite remoteEntry.js: a legacy Webpack/global-container build is not guaranteed to load unchanged and may need rebuilding with the Forge template.
 
 **client.lua · legacy caller versus new caller**
 
 ~~~text
--- Existing legacy caller (requires the installed npwd proxy):
+-- Unchanged legacy caller; routed INSIDE Forge NPWD:
 exports['npwd']:isPhoneVisible()
 exports['npwd']:sendNPWDMessage('forge-npwd-appexemple', 'summaryUpdated', {})
 
--- New integrations use ONLY the canonical resource:
+-- New integrations use the canonical resource:
 exports['forge-npwd']:isPhoneVisible()
 exports['forge-npwd']:sendForgeNPWDMessage('forge-npwd-appexemple', 'summaryUpdated', {})
 
--- The proxy is a compatibility boundary, not another phone.
--- ESM/Vite external apps expose './config'; older Webpack remotes may
--- need rebuilding before use with the current external-app loader.
+-- No duplicate resource or compatibility installer.
+-- ESM/Vite apps expose './config'; older Webpack remotes may need rebuilding.
 ~~~
 
 Implementation: compat/aliases.json; apps/phone/src/common/hooks/useExternalApps.tsx
 
 ### Supported boundaries and unchanged data
 
-Known resource aliases, public exports, registered incoming events, NUI callbacks/old resource URLs, convar fallback and known saved app IDs are covered. Third-party app names are not blindly renamed. Outgoing internal event observers are not indiscriminately mirrored: migrate such listeners to current names to avoid duplicate effects. Existing npwd_* and forge_phone_* SQL names and old storage keys remain intentional. Do not promise every internal event or every historical frontend bundle works automatically; test your actual old consumers before release.
+Known exports, registered incoming events/NUI callbacks, legacy convars and saved app IDs are covered. Inside the phone document, compat/nui.ts rewrites known legacy fetch/XHR resource hosts, preserving request options. It cannot rewrite independent NUI documents, iframe contexts or every prebuilt script URL: use current names there. Unknown third-party names and outgoing observers are not blindly mirrored. SQL tables and storage keys stay unchanged; test actual old consumers.
 
-Implementation: compat/names.ts; compat/client.ts; compat/server.ts; FORGE_NPWD_COMPAT.md
+Implementation: compat/nui.ts; compat/names.ts; compat/client.ts; compat/server.ts; FORGE_NPWD_COMPAT.md
+
+### Migration and restart precautions
+
+Remove startup lines and folders for forge-npwd-bridge and [forge-npwd-compat]; start only the canonical phone and apps. Preserve settings and SQL data. Never run original NPWD alongside Forge NPWD. Apply the migration in a planned city restart. FiveM caches export references by requested resource name: after restarting the phone alone, restart affected old consumers too. No global state hook or synthetic stop event hides this limitation.
+
+Implementation: FORGE_NPWD_COMPAT.md; fxmanifest.lua
 
 <a id=testing></a>
 
@@ -1530,7 +1546,9 @@ Trace resource availability, federation, callbacks and device context independen
 
 ### Missing export or app
 
-No such export isPhoneVisible in resource npwd usually means an old consumer is calling a resource that is absent or not the installed adapter. Verify forge-npwd is started, [forge-npwd-compat] is installed if needed and the consumer is on the correct client/server side. For a missing app, check its folder name in config.json apps, remoteEntry.js at web/dist root, the ./config expose and React component icons. For a visible catalog entry but absent home icon/widget, install the app through Forge Store and check saved layout space.
+For an old npwd export error, check forge-npwd is started with current compat/exports.lua and catalog, the real app provider is available and the caller uses the right side. Do not install proxy resources. Restart old consumers with cached exports after updating the phone. For absent apps, check apps in config.json, remoteEntry.js, ./config and component icons. Install via Forge Store and check desktop space.
+
+Implementation: compat/exports.lua; compat/exports.json
 
 ### NUI timeout, blank screen or stale widget
 
